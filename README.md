@@ -159,7 +159,8 @@ uv pip install --python .venv/Scripts/python.exe transformers accelerate einops 
 Real training (as opposed to the CPU correctness checks above) needs rented GPU
 compute — this model is small enough (~250M params) to train on a single free-tier
 T4, e.g. via Kaggle's free 30 GPU-hours/week, the same setup Laya's own team used for
-their fine-tuning notebook.
+their fine-tuning notebook. Step-by-step Kaggle/Colab setup:
+[`docs/cloud-training.md`](docs/cloud-training.md).
 
 ## Competitive context
 

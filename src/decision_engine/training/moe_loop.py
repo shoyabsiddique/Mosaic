@@ -20,6 +20,7 @@ from decision_engine.model.encoder import DEFAULT_ENCODER_NAME, load_tokenizer
 from decision_engine.model.moe_model import MoEModel
 from decision_engine.model.types import QTYPE_TO_IDX
 from decision_engine.training.dataset import Collator, TypedDecisionDataset
+from decision_engine.training.device_utils import move_batch_to_device, resolve_device
 from decision_engine.training.metrics import expected_calibration_error, summarize_batch
 from decision_engine.training.reward import compute_moe_loss
 
@@ -34,6 +35,7 @@ def evaluate(model: MoEModel, loader: DataLoader) -> dict:
     """Aggregate accuracy/calibration over a held-out set -- what actually answers
     "is it any good," as opposed to the smoke test's raw loss/reward numbers."""
     model.eval()
+    device = next(model.parameters()).device
     all_confidences: list[torch.Tensor] = []
     all_correctness: list[torch.Tensor] = []
     acc_sum: dict[str, float] = {}
@@ -42,6 +44,7 @@ def evaluate(model: MoEModel, loader: DataLoader) -> dict:
     mae_n: dict[str, int] = {}
 
     for batch in loader:
+        batch = move_batch_to_device(batch, device)
         out = model(batch)
         probs, target, mask, qtype_idx = out["blended_probs"], batch["target"], batch["option_mask"], batch["qtype_idx"]
 
@@ -89,11 +92,14 @@ def run_moe_smoke_test(
     lambda_calib: float = 0.0,
     lambda_balance: float = 0.01,
     seed: int = 0,
+    device: Optional[str] = None,
 ) -> list[float]:
     torch.manual_seed(seed)
+    device = resolve_device(device)
+    print(f"using device: {device}")
 
     tokenizer = load_tokenizer(DEFAULT_ENCODER_NAME)
-    model = MoEModel(domain_names, DEFAULT_ENCODER_NAME)
+    model = MoEModel(domain_names, DEFAULT_ENCODER_NAME).to(device)
     model.train()
 
     dataset = TypedDecisionDataset(data_dir, max_examples=max_examples)
@@ -106,6 +112,7 @@ def run_moe_smoke_test(
     for step, batch in enumerate(loader):
         if step >= n_steps:
             break
+        batch = move_batch_to_device(batch, device)
         out = model(batch)
         loss, reward = compute_moe_loss(
             out["blended_probs"], out["expert_probs"], out["gate_logits"], out["topk_idx"],

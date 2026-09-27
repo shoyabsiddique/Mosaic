@@ -1,8 +1,9 @@
 """Minimal training loop -- proves the Phase 2 pipeline runs correctly end-to-end on
-real data (finite loss, gradients flow, a checkpoint can be saved). This is NOT a
-convergence run: real training needs rented GPU compute, not this local CPU-only
-machine -- see docs/local-serving.md's inference-vs-training distinction and
-docs/tech-stack.md's `accelerate` entry.
+real data (finite loss, gradients flow, a checkpoint can be saved). On this local
+CPU-only machine that's all it's used for; `device=None` auto-detects a GPU when one
+is available (Kaggle/Colab) so the same script becomes a real training loop there
+without any code changes -- see docs/local-serving.md's inference-vs-training
+distinction and docs/tech-stack.md's `accelerate` entry.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from torch.utils.data import DataLoader
 from decision_engine.model.baseline_model import BaselineModel
 from decision_engine.model.encoder import DEFAULT_ENCODER_NAME, load_tokenizer
 from decision_engine.training.dataset import Collator, TypedDecisionDataset
+from decision_engine.training.device_utils import move_batch_to_device, resolve_device
 from decision_engine.training.reward import compute_loss
 
 
@@ -27,11 +29,14 @@ def run_smoke_test(
     max_state_len: int = 256,
     lambda_calib: float = 0.0,
     seed: int = 0,
+    device: Optional[str] = None,
 ) -> list[float]:
     torch.manual_seed(seed)
+    device = resolve_device(device)
+    print(f"using device: {device}")
 
     tokenizer = load_tokenizer(DEFAULT_ENCODER_NAME)
-    model = BaselineModel(DEFAULT_ENCODER_NAME)
+    model = BaselineModel(DEFAULT_ENCODER_NAME).to(device)
     model.train()
 
     dataset = TypedDecisionDataset(data_dir, max_examples=max_examples)
@@ -44,6 +49,7 @@ def run_smoke_test(
     for step, batch in enumerate(loader):
         if step >= n_steps:
             break
+        batch = move_batch_to_device(batch, device)
         logits = model(batch)
         loss, reward = compute_loss(
             logits, batch["target"], batch["option_mask"], batch["qtype_idx"], lambda_calib=lambda_calib,

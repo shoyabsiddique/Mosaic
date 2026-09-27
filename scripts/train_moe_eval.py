@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from decision_engine.model.encoder import DEFAULT_ENCODER_NAME, load_tokenizer
 from decision_engine.model.moe_model import MoEModel
 from decision_engine.training.dataset import Collator, TypedDecisionDataset, train_val_split
+from decision_engine.training.device_utils import move_batch_to_device, resolve_device
 from decision_engine.training.moe_loop import DEFAULT_DOMAIN_NAMES, evaluate
 from decision_engine.training.reward import compute_moe_loss
 
@@ -21,9 +22,11 @@ from decision_engine.training.reward import compute_moe_loss
 def main():
     torch.manual_seed(0)
     data_dir = Path(__file__).parents[1] / "data"
+    device = resolve_device(None)
+    print(f"using device: {device}")
 
     tokenizer = load_tokenizer(DEFAULT_ENCODER_NAME)
-    model = MoEModel(DEFAULT_DOMAIN_NAMES, DEFAULT_ENCODER_NAME)
+    model = MoEModel(DEFAULT_DOMAIN_NAMES, DEFAULT_ENCODER_NAME).to(device)
 
     dataset = TypedDecisionDataset(data_dir, max_examples=300)
     train_ds, val_ds = train_val_split(dataset, val_fraction=0.2, seed=0)
@@ -45,6 +48,7 @@ def main():
     for batch in train_loader:
         if step >= n_steps:
             break
+        batch = move_batch_to_device(batch, device)
         out = model(batch)
         loss, reward = compute_moe_loss(
             out["blended_probs"], out["expert_probs"], out["gate_logits"], out["topk_idx"],
