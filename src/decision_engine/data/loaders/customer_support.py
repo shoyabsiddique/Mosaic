@@ -27,10 +27,20 @@ sampling artifact, so it would be wrong to pretend otherwise by force-balancing 
 50/50. Instead, `fetch_raw` deliberately oversamples `timely=No` for training (there
 just aren't enough examples otherwise to learn from) while this docstring records the
 true prior for anyone calibrating against it later.
+
+RATE LIMITING: `fetch_raw` makes 14 sequential requests to this endpoint. During
+development this triggered a `403 Forbidden` from CFPB's side after repeated runs in
+one session (confirmed: it started failing even from the same machine that had pulled
+this data successfully minutes earlier, so it's rate-limiting/abuse detection, not a
+one-off). A small delay between requests is a courtesy that reduces the odds of
+tripping it again -- see `sleep_s` below, same pattern security_ops.py already uses
+for the NVD API. If you hit a 403 here, it is very likely temporary: wait a while
+before retrying rather than hammering it again immediately.
 """
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -73,21 +83,26 @@ def _fetch_page(params: dict) -> list[dict]:
     return [hit["_source"] for hit in resp.json()["hits"]["hits"]]
 
 
-def fetch_raw(per_product: int = 150, n_timely_no: int = 150) -> list[dict]:
+def fetch_raw(per_product: int = 150, n_timely_no: int = 150, sleep_s: float = 1.5) -> list[dict]:
     """Pull a stratified sample from the live CFPB API. No API key required.
 
     Queries each product category separately (`per_product` complaints each) instead
     of relying on the API's recency-skewed default sort, then tops up with
     `n_timely_no` explicitly `timely=No` complaints -- a real but rare (~0.6% of the
     population, verified) class that a plain stratified-by-product pull would otherwise
-    barely include.
+    barely include. `sleep_s` paces the 14 sequential requests -- see this module's
+    RATE LIMITING note.
     """
     complaints: dict[str, dict] = {}
+    products = list(PRODUCT_CRITERIA)
 
-    for product in PRODUCT_CRITERIA:
+    for i, product in enumerate(products):
         for c in _fetch_page({"size": per_product, "product": product}):
             complaints[c["complaint_id"]] = c
+        if i < len(products) - 1:
+            time.sleep(sleep_s)
 
+    time.sleep(sleep_s)
     for c in _fetch_page({"size": n_timely_no, "timely": "No"}):
         complaints[c["complaint_id"]] = c
 

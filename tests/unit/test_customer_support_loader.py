@@ -87,6 +87,7 @@ def test_fetch_raw_queries_every_product_category_and_a_timely_no_topup(monkeypa
                  "timely": params.get("timely", "Yes")}]
 
     monkeypatch.setattr(cs, "_fetch_page", fake_fetch_page)
+    monkeypatch.setattr("time.sleep", lambda s: None)  # fetch_raw paces requests; don't slow down the test
 
     complaints = fetch_raw(per_product=5, n_timely_no=5)
 
@@ -96,12 +97,26 @@ def test_fetch_raw_queries_every_product_category_and_a_timely_no_topup(monkeypa
     assert len(complaints) == len(PRODUCT_CRITERIA) + 1  # one complaint per call, no duplicate ids
 
 
+def test_fetch_raw_paces_requests_between_products(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(cs, "_fetch_page", lambda params: [])
+    monkeypatch.setattr("time.sleep", lambda s: sleeps.append(s))
+
+    fetch_raw(per_product=1, n_timely_no=1, sleep_s=2.5)
+
+    # one sleep between each of the 13 gaps among 13 products, plus one before the
+    # timely=No topup request -- all paced at the given sleep_s, none skipped
+    assert len(sleeps) == len(PRODUCT_CRITERIA)
+    assert all(s == 2.5 for s in sleeps)
+
+
 def test_fetch_raw_deduplicates_by_complaint_id(monkeypatch):
     def fake_fetch_page(params):
         # every call "coincidentally" returns the same complaint_id
         return [{"complaint_id": "dup-1", "product": "Mortgage", "timely": "Yes"}]
 
     monkeypatch.setattr(cs, "_fetch_page", fake_fetch_page)
+    monkeypatch.setattr("time.sleep", lambda s: None)
 
     complaints = fetch_raw(per_product=5, n_timely_no=5)
     assert len(complaints) == 1

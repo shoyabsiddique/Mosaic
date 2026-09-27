@@ -1,6 +1,6 @@
 import requests
 
-from decision_engine.data.http_utils import get_with_retry
+from decision_engine.data.http_utils import DEFAULT_USER_AGENT, get_with_retry
 
 
 class _FakeResponse:
@@ -9,7 +9,9 @@ class _FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.exceptions.HTTPError(f"{self.status_code} error")
+            err = requests.exceptions.HTTPError(f"{self.status_code} error")
+            err.response = self  # real requests.HTTPError carries this; needed for status-based logic
+            raise err
 
 
 def test_succeeds_on_first_try_without_sleeping(monkeypatch):
@@ -27,7 +29,7 @@ def test_succeeds_on_first_try_without_sleeping(monkeypatch):
     assert len(calls) == 1
 
 
-def test_retries_after_transient_failure_then_succeeds(monkeypatch):
+def test_retries_after_transient_5xx_then_succeeds(monkeypatch):
     attempts = {"n": 0}
     sleeps = []
 
@@ -46,7 +48,7 @@ def test_retries_after_transient_failure_then_succeeds(monkeypatch):
     assert len(sleeps) == 2  # slept between attempts 1->2 and 2->3
 
 
-def test_raises_last_error_after_exhausting_retries(monkeypatch):
+def test_raises_last_error_after_exhausting_retries_on_5xx(monkeypatch):
     def fake_get(url, params=None, headers=None, timeout=None):
         return _FakeResponse(502)
 
@@ -77,15 +79,105 @@ def test_connection_error_is_also_retried(monkeypatch):
     assert attempts["n"] == 2
 
 
-def test_params_and_headers_are_forwarded(monkeypatch):
+def test_403_fails_immediately_without_retrying(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append(url)
+        return _FakeResponse(403)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda s: (_ for _ in ()).throw(AssertionError("should not sleep")))
+
+    try:
+        get_with_retry("http://example.com", retries=2)
+        assert False, "expected HTTPError"
+    except requests.exceptions.HTTPError:
+        pass
+    assert len(calls) == 1  # no retries attempted at all
+
+
+def test_404_also_fails_immediately_without_retrying(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append(url)
+        return _FakeResponse(404)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda s: (_ for _ in ()).throw(AssertionError("should not sleep")))
+
+    try:
+        get_with_retry("http://example.com", retries=2)
+        assert False, "expected HTTPError"
+    except requests.exceptions.HTTPError:
+        pass
+    assert len(calls) == 1
+
+
+def test_429_is_retried_like_5xx(monkeypatch):
+    attempts = {"n": 0}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        attempts["n"] += 1
+        if attempts["n"] < 2:
+            return _FakeResponse(429)
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    resp = get_with_retry("http://example.com", retries=2)
+    assert resp.status_code == 200
+    assert attempts["n"] == 2
+
+
+def test_default_user_agent_is_sent_when_no_headers_given(monkeypatch):
+    seen = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        seen["headers"] = headers
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    get_with_retry("http://example.com")
+    assert seen["headers"]["User-Agent"] == DEFAULT_USER_AGENT
+
+
+def test_caller_headers_are_merged_with_default_user_agent(monkeypatch):
+    seen = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        seen["headers"] = headers
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    get_with_retry("http://example.com", headers={"Accept": "application/json"})
+    assert seen["headers"]["User-Agent"] == DEFAULT_USER_AGENT
+    assert seen["headers"]["Accept"] == "application/json"
+
+
+def test_caller_can_override_the_default_user_agent(monkeypatch):
+    seen = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        seen["headers"] = headers
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    get_with_retry("http://example.com", headers={"User-Agent": "custom-agent"})
+    assert seen["headers"]["User-Agent"] == "custom-agent"
+
+
+def test_params_and_timeout_are_forwarded(monkeypatch):
     seen = {}
 
     def fake_get(url, params=None, headers=None, timeout=None):
         seen["params"] = params
-        seen["headers"] = headers
         seen["timeout"] = timeout
         return _FakeResponse(200)
 
     monkeypatch.setattr(requests, "get", fake_get)
-    get_with_retry("http://example.com", params={"a": 1}, headers={"X": "y"}, timeout=45)
-    assert seen == {"params": {"a": 1}, "headers": {"X": "y"}, "timeout": 45}
+    get_with_retry("http://example.com", params={"a": 1}, timeout=45)
+    assert seen["params"] == {"a": 1}
+    assert seen["timeout"] == 45

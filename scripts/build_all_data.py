@@ -7,6 +7,13 @@ train_moe_eval.py failed with "train examples: 0" on a fresh Colab clone.
 
 Needs internet access (hits CFPB, NVD, HF datasets-server, SpamAssassin, and the VCDB
 GitHub mirror) -- same requirement the loaders have when run individually.
+
+Each source is independent, so one failing (e.g. CFPB's API rate-limiting/blocking a
+run after repeated hits in one session -- confirmed to happen, see
+customer_support.py's RATE LIMITING note) shouldn't prevent the other five domains from
+building. Failures are caught, reported, and the script continues; the final summary
+says exactly which domains built and which didn't, so a partial run is still usable
+and obviously not silently incomplete.
 """
 from pathlib import Path
 
@@ -44,21 +51,33 @@ SYNTHETIC_GENERATORS = [
 ]
 
 
+def _run_all(entries: list, label: str) -> tuple[int, list[str], list[str]]:
+    total, succeeded, failed = 0, [], []
+    for module, out_path in entries:
+        name = module.__name__
+        print(f"[{label}] {name} -> {out_path}")
+        try:
+            n = module.build_and_save(out_path)
+        except Exception as e:  # noqa: BLE001 -- deliberately broad: one bad source must not stop the rest
+            print(f"            FAILED: {type(e).__name__}: {e}")
+            failed.append(name)
+            continue
+        print(f"            wrote {n} records")
+        total += n
+        succeeded.append(name)
+    return total, succeeded, failed
+
+
 def main():
-    total = 0
-    for module, out_path in REAL_LOADERS:
-        print(f"[real]      {module.__name__} -> {out_path}")
-        n = module.build_and_save(out_path)
-        print(f"            wrote {n} records")
-        total += n
+    real_total, real_ok, real_failed = _run_all(REAL_LOADERS, "real")
+    synth_total, synth_ok, synth_failed = _run_all(SYNTHETIC_GENERATORS, "synthetic")
 
-    for module, out_path in SYNTHETIC_GENERATORS:
-        print(f"[synthetic] {module.__name__} -> {out_path}")
-        n = module.build_and_save(out_path)
-        print(f"            wrote {n} records")
-        total += n
-
-    print(f"\ntotal records written: {total}")
+    print(f"\ntotal records written: {real_total + synth_total}")
+    print(f"succeeded ({len(real_ok) + len(synth_ok)}): {real_ok + synth_ok}")
+    if real_failed or synth_failed:
+        print(f"FAILED ({len(real_failed) + len(synth_failed)}): {real_failed + synth_failed}")
+        print("-> re-run this script later to retry just the failed ones (existing")
+        print("   output files for succeeded domains are left as-is either way).")
 
 
 if __name__ == "__main__":
