@@ -1,0 +1,75 @@
+<svg width="680" height="632" viewBox="0 0 680 632" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>Decision engine inference architecture</title>
+<desc>State and typed questions flow through a shared NeoBERT encoder and a separate option encoder, into a top-2 soft-routing gate over six domain expert heads, blended into a calibrated probability output, with optional explain and SLA-threshold feature flags branching off the output.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<style>
+.box{fill:#F1EFE8;stroke:#888780;stroke-width:0.5;}
+.blue{fill:#E6F1FB;stroke:#378ADD;stroke-width:0.5;}
+.teal{fill:#E1F5EE;stroke:#1D9E75;stroke-width:0.5;}
+.gray{fill:#F1EFE8;stroke:#888780;stroke-width:0.5;}
+.th{font-family:sans-serif;font-size:14px;font-weight:500;fill:#2C2C2A;}
+.ts{font-family:sans-serif;font-size:12px;fill:#5F5E5A;}
+.arr{stroke:#5F5E5A;stroke-width:1.5;fill:none;}
+.leader{stroke:#888780;stroke-width:0.5;stroke-dasharray:4,3;fill:none;}
+</style>
+<line x1="340" y1="92" x2="180" y2="118" class="arr" marker-end="url(#arrow)"/>
+<line x1="340" y1="92" x2="428" y2="118" class="arr" marker-end="url(#arrow)"/>
+<line x1="180" y1="172" x2="340" y2="198" class="arr" marker-end="url(#arrow)"/>
+<line x1="428" y1="172" x2="340" y2="198" class="arr" marker-end="url(#arrow)"/>
+<line x1="340" y1="252" x2="340" y2="278" class="arr" marker-end="url(#arrow)"/>
+<line x1="340" y1="332" x2="340" y2="358" class="arr" marker-end="url(#arrow)"/>
+<line x1="340" y1="412" x2="340" y2="438" class="arr" marker-end="url(#arrow)"/>
+<line x1="340" y1="492" x2="218" y2="518" class="leader" marker-end="url(#arrow)"/>
+<line x1="340" y1="492" x2="445" y2="518" class="leader" marker-end="url(#arrow)"/>
+<g class="gray">
+<rect x="230" y="40" width="220" height="52" rx="4"/>
+<text class="th" x="340" y="62" text-anchor="middle">State + typed questions</text>
+<text class="ts" x="340" y="80" text-anchor="middle">choice &#183; score &#183; noul</text>
+</g>
+<g class="blue">
+<rect x="65" y="120" width="230" height="52" rx="4"/>
+<text class="th" x="180" y="142" text-anchor="middle">NeoBERT encoder</text>
+<text class="ts" x="180" y="160" text-anchor="middle">shared, 4,096-token context</text>
+</g>
+<g class="blue">
+<rect x="320" y="120" width="215" height="52" rx="4"/>
+<text class="th" x="427" y="142" text-anchor="middle">Option encoder</text>
+<text class="ts" x="427" y="160" text-anchor="middle">per question + type embed</text>
+</g>
+<g class="teal">
+<rect x="235" y="200" width="210" height="52" rx="4"/>
+<text class="th" x="340" y="222" text-anchor="middle">Gate: top-2 routing</text>
+<text class="ts" x="340" y="240" text-anchor="middle">soft blend, load-balanced</text>
+</g>
+<g class="teal">
+<rect x="230" y="280" width="220" height="52" rx="4"/>
+<text class="th" x="340" y="302" text-anchor="middle">6 domain expert heads</text>
+<text class="ts" x="340" y="320" text-anchor="middle">cross-attn, top-2 active</text>
+</g>
+<g class="teal">
+<rect x="230" y="360" width="220" height="52" rx="4"/>
+<text class="th" x="340" y="382" text-anchor="middle">Blend top-2 outputs</text>
+<text class="ts" x="340" y="400" text-anchor="middle">probability-space mixture</text>
+</g>
+<g class="gray">
+<rect x="240" y="440" width="200" height="52" rx="4"/>
+<text class="th" x="340" y="462" text-anchor="middle">Calibrated probability</text>
+<text class="ts" x="340" y="480" text-anchor="middle">per typed question</text>
+</g>
+<g class="gray">
+<rect x="110" y="520" width="215" height="52" rx="4"/>
+<text class="th" x="217" y="542" text-anchor="middle">explain flag</text>
+<text class="ts" x="217" y="560" text-anchor="middle">attention-weight rationale</text>
+</g>
+<g class="gray">
+<rect x="350" y="520" width="190" height="52" rx="4"/>
+<text class="th" x="445" y="542" text-anchor="middle">sla_threshold flag</text>
+<text class="ts" x="445" y="560" text-anchor="middle">abstain below threshold</text>
+</g>
+<rect x="90" y="597" width="12" height="12" fill="#378ADD"/>
+<text class="ts" x="108" y="607">shared encoding</text>
+<rect x="300" y="597" width="12" height="12" fill="#1D9E75"/>
+<text class="ts" x="318" y="607">MoE decision core</text>
+<rect x="480" y="597" width="12" height="12" fill="#888780"/>
+<text class="ts" x="498" y="607">optional flag</text>
+</svg>

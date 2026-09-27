@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test / lint / type-check caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache/
+htmlcov/
+.coverage
+
+# Generated training data -- reproducible via src/decision_engine/data/loaders and
+# data/synth (each loader's build_and_save / __main__ regenerates its own file); not
+# committing pulled/generated data keeps the repo to the pipeline that produces it,
+# not the pipeline's output, and avoids redistributing third-party-sourced data.
+data/*/*.jsonl
+
+# Model checkpoints and downloaded weights
+*.pt
+*.pth
+*.safetensors
+checkpoints/
+
+# Experiment tracking
+wandb/
+mlruns/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.*
+*.local
+
+# Scratch downloads that sometimes land in the repo root during data exploration
+*.csv.zip
+*.tar.bz2
+*.gz
