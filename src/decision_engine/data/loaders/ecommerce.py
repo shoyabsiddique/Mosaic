@@ -25,8 +25,7 @@ import zlib
 from pathlib import Path
 from typing import Iterator, Optional
 
-import requests
-
+from decision_engine.data.http_utils import get_with_retry
 from decision_engine.data.schema import Question, QuestionType, Record, TypedTarget
 
 GZ_URL = "https://snap.stanford.edu/data/finefoods.txt.gz"
@@ -41,8 +40,7 @@ FIELD_RE = re.compile(r"^(product/productId|review/helpfulness|review/score|revi
 def fetch_raw(byte_range: int = 4_000_000) -> list[dict]:
     """Fetch a byte-range prefix of the gzip file (not the whole 122MB) and parse
     whatever complete review blocks fall inside it. No API key required."""
-    resp = requests.get(GZ_URL, headers={"Range": f"bytes=0-{byte_range}"}, timeout=60)
-    resp.raise_for_status()
+    resp = get_with_retry(GZ_URL, headers={"Range": f"bytes=0-{byte_range}"}, timeout=60)
     decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16)
     text = decompressor.decompress(resp.content).decode("utf-8", errors="replace")
 

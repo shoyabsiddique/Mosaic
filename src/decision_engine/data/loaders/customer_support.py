@@ -31,12 +31,10 @@ true prior for anyone calibrating against it later.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Iterator
 
-import requests
-
+from decision_engine.data.http_utils import get_with_retry
 from decision_engine.data.schema import Question, QuestionType, Record, TypedTarget
 
 API_URL = "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/"
@@ -67,21 +65,12 @@ PRODUCT_CRITERIA: dict[str, str] = {
 STATE_FIELDS = ("issue", "sub_issue", "company_response", "submitted_via", "company", "state", "tags")
 
 
-def _fetch_page(params: dict, retries: int = 2, timeout: int = 60) -> list[dict]:
+def _fetch_page(params: dict) -> list[dict]:
     """The live API is occasionally slow enough to exceed a short timeout on some
     product queries -- fetch_raw makes 14 sequential calls, so one transient timeout
-    shouldn't fail the whole stratified pull."""
-    last_error: Exception = RuntimeError("unreachable")
-    for attempt in range(retries + 1):
-        try:
-            resp = requests.get(API_URL, params=params, headers={"Accept": "application/json"}, timeout=timeout)
-            resp.raise_for_status()
-            return [hit["_source"] for hit in resp.json()["hits"]["hits"]]
-        except (requests.exceptions.RequestException,) as e:
-            last_error = e
-            if attempt < retries:
-                time.sleep(2 * (attempt + 1))
-    raise last_error
+    shouldn't fail the whole stratified pull (see data/http_utils.py)."""
+    resp = get_with_retry(API_URL, params=params, headers={"Accept": "application/json"})
+    return [hit["_source"] for hit in resp.json()["hits"]["hits"]]
 
 
 def fetch_raw(per_product: int = 150, n_timely_no: int = 150) -> list[dict]:

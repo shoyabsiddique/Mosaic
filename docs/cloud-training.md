@@ -9,6 +9,19 @@ Both platforms ship PyTorch **pre-installed with a matching CUDA build** -- don'
 `pip install torch` again, that's how you end up with a CPU-only wheel shadowing the
 GPU one. Only install what's missing.
 
+**`data/` is gitignored on purpose** (see `.gitignore`'s comment -- it's a reproducible
+pull/generation, not source code), which means a fresh clone anywhere, including a
+cloud notebook, has empty `data/<domain>/` folders. Skipping this step is exactly what
+produces `train examples: 0` / `ValueError: num_samples should be a positive integer`
+the first time you run a training script on a new checkout. Run once, right after
+`pip install -e .`, before any training script:
+```bash
+!python scripts/build_all_data.py
+```
+This hits six live public APIs/mirrors (CFPB, NVD, HF datasets-server, SpamAssassin,
+VCDB's GitHub mirror, SNAP) plus four synthetic generators -- needs the same internet
+access as everything else here, takes a few minutes.
+
 ## Kaggle (recommended -- see PLAN.md/README for why: 30 free GPU-hrs/week, published
 quota, no credit card, same setup Laya's own team used)
 
@@ -23,6 +36,7 @@ quota, no credit card, same setup Laya's own team used)
    %cd mosaic
    !pip install -q transformers accelerate einops safetensors xformers
    !pip install -q -e .
+   !python scripts/build_all_data.py
    ```
 4. Confirm the GPU is actually visible before running anything:
    ```python
@@ -48,6 +62,7 @@ reclaimed without warning -- don't rely on it for a multi-hour run you can't res
    %cd mosaic
    !pip install -q transformers accelerate einops safetensors xformers
    !pip install -q -e .
+   !python scripts/build_all_data.py
    ```
 4. Same GPU check and run commands as Kaggle, above.
 5. Colab's filesystem is wiped when the runtime recycles. Mount Drive first if you

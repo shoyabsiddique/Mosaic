@@ -27,8 +27,7 @@ import zipfile
 from pathlib import Path
 from typing import Iterator
 
-import requests
-
+from decision_engine.data.http_utils import get_with_retry
 from decision_engine.data.schema import Question, QuestionType, Record, TypedTarget
 
 ZIP_URL = "https://archive.ics.uci.edu/static/public/468/online+shoppers+purchasing+intention+dataset.zip"
@@ -47,8 +46,7 @@ STATE_FIELDS = (
 
 def fetch_raw() -> list[dict]:
     """Download and parse the session CSV. No API key required."""
-    resp = requests.get(ZIP_URL, timeout=30)
-    resp.raise_for_status()
+    resp = get_with_retry(ZIP_URL)
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         raw = zf.read(CSV_NAME).decode("utf-8", errors="replace")
     return list(csv.DictReader(io.StringIO(raw)))

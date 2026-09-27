@@ -24,8 +24,7 @@ import zipfile
 from pathlib import Path
 from typing import Iterator, Optional
 
-import requests
-
+from decision_engine.data.http_utils import get_with_retry
 from decision_engine.data.schema import Question, QuestionType, Record, TypedTarget
 
 DOMAIN = "email-communication"
@@ -38,8 +37,7 @@ SMS_LICENSE = "CC-BY-4.0"
 
 def fetch_raw_sms() -> list[tuple[str, str]]:
     """Download and extract (label, text) pairs. No API key required."""
-    resp = requests.get(SMS_ZIP_URL, timeout=30)
-    resp.raise_for_status()
+    resp = get_with_retry(SMS_ZIP_URL)
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         raw = zf.read("SMSSpamCollection").decode("utf-8", errors="replace")
     pairs = []
@@ -130,8 +128,7 @@ def fetch_raw_spamassassin(per_category: int = 300) -> list[tuple[str, str, str]
     """
     results: list[tuple[str, str, str]] = []
     for folder, archive_name in SPAMASSASSIN_ARCHIVES.items():
-        resp = requests.get(SPAMASSASSIN_BASE_URL + archive_name, timeout=60)
-        resp.raise_for_status()
+        resp = get_with_retry(SPAMASSASSIN_BASE_URL + archive_name)
         count = 0
         with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:bz2") as tf:
             for member in tf.getmembers():

@@ -147,8 +147,9 @@ uv pip install --python .venv/Scripts/python.exe transformers accelerate einops 
 # run the test suite
 .venv/Scripts/python.exe -m pytest tests/unit -q
 
-# pull real data for one domain (hits a live public API, no auth needed)
-.venv/Scripts/python.exe -m decision_engine.data.loaders.customer_support
+# pull real + synthetic data for all six domains (data/ is gitignored -- reproducible
+# pulls, not source -- so this is required on every fresh checkout, incl. cloud notebooks)
+.venv/Scripts/python.exe scripts/build_all_data.py
 
 # run the Phase 2 / Phase 3 smoke tests (CPU; downloads NeoBERT on first run, ~1GB)
 .venv/Scripts/python.exe scripts/train.py            # single-head baseline

@@ -23,8 +23,7 @@ import json
 from pathlib import Path
 from typing import Iterator
 
-import requests
-
+from decision_engine.data.http_utils import get_with_retry
 from decision_engine.data.schema import Question, QuestionType, Record, TypedTarget
 from decision_engine.data.soft_targets import interpolated_ordinal_target
 
@@ -38,15 +37,16 @@ SEVERITY_LEVELS = ["not toxic", "mildly toxic", "toxic", "severely toxic"]
 
 
 def fetch_raw(n_rows: int = 1000, page_size: int = 100) -> list[dict]:
-    """Page through the HF datasets-server rows API. No API key required."""
+    """Page through the HF datasets-server rows API. No API key required. Retries
+    transient failures (e.g. a 502) per-page rather than failing the whole pull --
+    see data/http_utils.py; this exact endpoint has returned a 502 mid-pull before."""
     rows: list[dict] = []
     offset = 0
     while len(rows) < n_rows:
-        resp = requests.get(ROWS_API, params={
+        resp = get_with_retry(ROWS_API, params={
             "dataset": DATASET_ID, "config": "default", "split": "train",
             "offset": offset, "length": min(page_size, n_rows - len(rows)),
-        }, timeout=30)
-        resp.raise_for_status()
+        })
         batch = [r["row"] for r in resp.json()["rows"]]
         if not batch:
             break

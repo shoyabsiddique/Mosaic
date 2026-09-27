@@ -30,8 +30,7 @@ import zipfile
 from pathlib import Path
 from typing import Iterator, Optional
 
-import requests
-
+from decision_engine.data.http_utils import get_with_retry
 from decision_engine.data.schema import Question, QuestionType, Record, TypedTarget
 
 DOMAIN = "security-ops"
@@ -51,10 +50,9 @@ def fetch_raw_nvd(n_results: int = 500, page_size: int = 200, sleep_s: float = 6
     cves: list[dict] = []
     start = 0
     while len(cves) < n_results:
-        resp = requests.get(NVD_API_URL, params={
+        resp = get_with_retry(NVD_API_URL, params={
             "resultsPerPage": min(page_size, n_results - len(cves)), "startIndex": start,
-        }, timeout=30)
-        resp.raise_for_status()
+        })
         batch = [v["cve"] for v in resp.json().get("vulnerabilities", [])]
         if not batch:
             break
@@ -125,8 +123,7 @@ ACTION_CATEGORIES = {
 def fetch_raw_vcdb(n_rows: int = 2000) -> list[dict]:
     """Download VCDB's flattened CSV export and return the first `n_rows` records with
     a non-empty summary. No API key required."""
-    resp = requests.get(VCDB_CSV_URL, timeout=60)
-    resp.raise_for_status()
+    resp = get_with_retry(VCDB_CSV_URL, timeout=60)
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         with zf.open("vcdb.csv") as f:
             text = io.TextIOWrapper(f, encoding="utf-8", errors="replace")
