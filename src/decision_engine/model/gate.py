@@ -28,7 +28,13 @@ class Gate(nn.Module):
         k = 1 if hard else self.top_k
         topk_vals, topk_idx = gate_logits.topk(k, dim=-1)
         topk_weights = torch.softmax(topk_vals, dim=-1)
-        blend_weights = torch.zeros_like(gate_logits).scatter(-1, topk_idx, topk_weights)
+        # Under torch.amp.autocast, nn.Linear runs in fp16 but softmax is promoted to
+        # fp32 for numerical stability, so gate_logits and topk_weights can genuinely
+        # differ in dtype -- scatter requires them to match. Build the zeros tensor in
+        # topk_weights' dtype (the promoted, more numerically stable one) rather than
+        # gate_logits', both to satisfy scatter and because it's the better precision
+        # for probabilities anyway. Confirmed via a real crash training under AMP.
+        blend_weights = torch.zeros_like(gate_logits, dtype=topk_weights.dtype).scatter(-1, topk_idx, topk_weights)
         return blend_weights, gate_logits, topk_idx
 
 

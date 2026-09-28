@@ -75,3 +75,28 @@ def test_load_balancing_loss_gradients_flow_to_logits():
     loss.backward()
     assert logits.grad is not None
     assert torch.isfinite(logits.grad).all()
+
+
+def test_forward_survives_gate_logits_and_softmax_dtype_mismatch(monkeypatch):
+    """Regression test for a real crash hit training under torch.amp.autocast on a
+    real GPU: nn.Linear runs in fp16 there but torch.softmax gets promoted to fp32 for
+    numerical stability, so gate_logits (fp16) and topk_weights (fp32) genuinely differ
+    in dtype -- torch.zeros_like(gate_logits).scatter(...) then fails with
+    "Expected self.dtype to be equal to src.dtype". This PyTorch/CPU build doesn't
+    reproduce that promotion under its own autocast, so the mismatch is forced directly
+    here to test the fix (build the zeros tensor in topk_weights' dtype) without
+    depending on a specific autocast backend's promotion behavior.
+    """
+    gate = _gate()
+    pooled = torch.randn(3, 8)
+
+    real_softmax = torch.softmax
+
+    def softmax_that_promotes_to_float64(x, dim):
+        return real_softmax(x, dim=dim).double()  # simulate a differing (promoted) dtype
+
+    monkeypatch.setattr(torch, "softmax", softmax_that_promotes_to_float64)
+
+    blend_weights, gate_logits, topk_idx = gate(pooled, hard=False)  # must not raise
+    assert blend_weights.dtype == torch.float64
+    assert torch.allclose(blend_weights.sum(-1).double(), torch.ones(3, dtype=torch.float64), atol=1e-6)
