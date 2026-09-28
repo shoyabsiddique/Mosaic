@@ -1,15 +1,28 @@
 """Real before/after check: evaluate the MoE model on held-out data, train for N
-steps, then evaluate again. Interpretable metrics (accuracy, ECE), not just raw loss --
-and critically, measured on examples the model did NOT train on, so this checks
-generalization rather than memorization of the training batch.
+optimizer updates, then evaluate again. Interpretable metrics (accuracy, ECE), not just
+raw loss -- and critically, measured on examples the model did NOT train on, so this
+checks generalization rather than memorization of the training batch.
 
-Sizing is deliberately configurable rather than hardcoded: the CPU-smoke-test defaults
-(300 examples, 20 steps, batch size 2) exist because that's what a CPU could handle in
-reasonable time. On a real GPU there's no reason to stay that small -- scale up via the
-flags below. A non-finite (NaN/Inf) loss on any step is skipped rather than applied
-(see the SKIPPED log line), so a bad batch can't corrupt the whole run; if you see
-skips, root-cause them (scripts/diagnose_nan.py) before trusting the final numbers,
-but the run itself will still complete and any good steps still train normally.
+Sizing is configurable rather than hardcoded, since the CPU-smoke-test defaults exist
+only because that's what a CPU could handle in reasonable time -- scale up on a GPU.
+Two things make that scaling actually fit in GPU memory instead of just OOM-ing:
+  - Mixed precision (`torch.amp`), enabled automatically on CUDA -- roughly halves
+    activation memory. This model is small enough (~250-300M params across encoder +
+    6 experts) that fp16 is not expected to hurt calibration meaningfully at this
+    stage, but that is an assumption to revisit once real accuracy numbers exist, not
+    a settled fact.
+  - Gradient accumulation (`--grad-accum-steps`): `--batch-size` is the micro-batch
+    that must fit in memory; the *effective* batch size used for each optimizer update
+    is `batch-size * grad-accum-steps`. This is the standard way to train at a large
+    effective batch size without needing it to fit in memory all at once.
+
+A non-finite (NaN/Inf) loss on any micro-batch is skipped rather than applied (see the
+SKIPPED log line) -- so a bad batch can't corrupt the whole run; if you see skips,
+root-cause them (scripts/diagnose_nan.py) before trusting the final numbers, but the
+run itself will still complete and any good steps still train normally. Separately,
+`torch.amp.GradScaler` also silently skips an optimizer step if fp16 *gradients*
+overflow (a different, unrelated failure mode from a NaN forward pass) -- that is
+standard, expected AMP behavior, not something this script needs to detect itself.
 """
 import argparse
 from pathlib import Path
@@ -26,11 +39,13 @@ from decision_engine.training.reward import compute_moe_loss
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--max-examples", type=int, default=300, help="total examples pulled before the train/val split")
     p.add_argument("--val-fraction", type=float, default=0.2)
-    p.add_argument("--n-steps", type=int, default=20)
-    p.add_argument("--batch-size", type=int, default=2)
+    p.add_argument("--n-steps", type=int, default=20, help="number of OPTIMIZER UPDATES, not micro-batches")
+    p.add_argument("--batch-size", type=int, default=2, help="micro-batch size -- what must fit in GPU memory")
+    p.add_argument("--grad-accum-steps", type=int, default=1,
+                   help="micro-batches accumulated per update; effective batch = batch-size * this")
     p.add_argument("--val-batch-size", type=int, default=4)
     p.add_argument("--max-state-len", type=int, default=192, help="up to NeoBERT's real limit of 4096")
     p.add_argument("--lr", type=float, default=1e-5)
@@ -38,6 +53,7 @@ def parse_args():
     p.add_argument("--lambda-calib", type=float, default=0.0)
     p.add_argument("--lambda-balance", type=float, default=0.01)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--no-amp", action="store_true", help="disable mixed precision even on CUDA")
     return p.parse_args()
 
 
@@ -46,7 +62,8 @@ def main():
     torch.manual_seed(args.seed)
     data_dir = Path(__file__).parents[1] / "data"
     device = resolve_device(None)
-    print(f"using device: {device}")
+    use_amp = device.type == "cuda" and not args.no_amp
+    print(f"using device: {device}  mixed_precision: {use_amp}")
     print(f"config: {vars(args)}")
 
     tokenizer = load_tokenizer(DEFAULT_ENCODER_NAME)
@@ -65,15 +82,26 @@ def main():
     print(before)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     model.train()
-    print(f"\n=== training for {args.n_steps} steps ===")
-    step = 0
-    n_skipped = 0
+
+    effective_batch = args.batch_size * args.grad_accum_steps
+    print(f"\n=== training for {args.n_steps} optimizer updates "
+          f"(micro-batch {args.batch_size} x accum {args.grad_accum_steps} = effective batch {effective_batch}) ===")
+
+    step, micro_step, n_skipped = 0, 0, 0
+    optimizer.zero_grad()
+    train_iter = iter(train_loader)
+
     while step < args.n_steps:
-        for batch in train_loader:
-            if step >= args.n_steps:
-                break
-            batch = move_batch_to_device(batch, device)
+        try:
+            batch = next(train_iter)
+        except StopIteration:
+            train_iter = iter(train_loader)  # exhausted the data -- start another epoch
+            batch = next(train_iter)
+
+        batch = move_batch_to_device(batch, device)
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp, dtype=torch.float16):
             out = model(batch)
             loss, reward = compute_moe_loss(
                 out["blended_probs"], out["expert_probs"], out["gate_logits"], out["topk_idx"],
@@ -81,29 +109,32 @@ def main():
                 lambda_expert=args.lambda_expert, lambda_calib=args.lambda_calib, lambda_balance=args.lambda_balance,
             )
 
-            if not torch.isfinite(loss):
-                # Skip rather than let a NaN/Inf loss reach optimizer.step(), which would
-                # permanently corrupt every parameter with a NaN update -- see moe_loop.py's
-                # run_moe_smoke_test for the same guard and scripts/diagnose_nan.py for a
-                # deeper one-off root-cause dive.
-                n_skipped += 1
-                bad_rows = (~torch.isfinite(out["blended_probs"])).any(-1)
-                print(f"step {step:4d}  SKIPPED: non-finite loss ({loss.item()})  "
-                      f"bad_qtypes={batch['qtype_idx'][bad_rows].tolist()}  "
-                      f"bad_domains={[d for d, bad in zip(batch['domain'], bad_rows.tolist()) if bad]}")
+        if not torch.isfinite(loss):
+            n_skipped += 1
+            bad_rows = (~torch.isfinite(out["blended_probs"])).any(-1)
+            print(f"step {step:4d}.{micro_step}  SKIPPED: non-finite loss ({loss.item()})  "
+                  f"bad_qtypes={batch['qtype_idx'][bad_rows].tolist()}  "
+                  f"bad_domains={[d for d, bad in zip(batch['domain'], bad_rows.tolist()) if bad]}")
+            micro_step += 1
+            if micro_step >= args.grad_accum_steps:
                 optimizer.zero_grad()
-                step += 1
-                continue
+                micro_step, step = 0, step + 1
+            continue
 
+        scaler.scale(loss / args.grad_accum_steps).backward()
+        micro_step += 1
+
+        if micro_step >= args.grad_accum_steps:
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            micro_step = 0
             if step % max(1, args.n_steps // 50) == 0 or step == args.n_steps - 1:
                 print(f"step {step:4d}  loss {loss.item():.4f}  mean_reward {reward.mean().item():.4f}")
             step += 1
 
     if n_skipped:
-        print(f"\n{n_skipped}/{args.n_steps} steps skipped due to non-finite loss -- "
+        print(f"\n{n_skipped} micro-batch(es) skipped due to non-finite loss -- "
               f"root-cause before fully trusting these numbers (see bad_qtypes/bad_domains above).")
 
     print("\n=== AFTER training ===")
