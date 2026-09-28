@@ -6,11 +6,15 @@ checks generalization rather than memorization of the training batch.
 Sizing is configurable rather than hardcoded, since the CPU-smoke-test defaults exist
 only because that's what a CPU could handle in reasonable time -- scale up on a GPU.
 Two things make that scaling actually fit in GPU memory instead of just OOM-ing:
-  - Mixed precision (`torch.amp`), enabled automatically on CUDA -- roughly halves
-    activation memory. This model is small enough (~250-300M params across encoder +
-    6 experts) that fp16 is not expected to hurt calibration meaningfully at this
-    stage, but that is an assumption to revisit once real accuracy numbers exist, not
-    a settled fact.
+  - Mixed precision (`torch.amp`), enabled automatically on CUDA, defaulting to
+    **bfloat16** -- roughly halves activation memory like fp16 does, but keeps fp32's
+    dynamic range. fp16 was tried first and confirmed, on a real T4 run, to produce a
+    non-finite loss on literally every single batch regardless of domain or question
+    type -- a classic symptom of pretrained-model activations overflowing fp16's
+    narrow range (max ~65504), not a bug in this codebase's own logic. bf16 doesn't
+    have that ceiling. `--amp-dtype fp16` is kept available for comparison, not as the
+    default. Note T4 (Turing) has no native bf16 Tensor Core acceleration -- expect the
+    memory win without necessarily the full throughput win newer GPUs would give bf16.
   - Gradient accumulation (`--grad-accum-steps`): `--batch-size` is the micro-batch
     that must fit in memory; the *effective* batch size used for each optimizer update
     is `batch-size * grad-accum-steps`. This is the standard way to train at a large
@@ -21,8 +25,9 @@ SKIPPED log line) -- so a bad batch can't corrupt the whole run; if you see skip
 root-cause them (scripts/diagnose_nan.py) before trusting the final numbers, but the
 run itself will still complete and any good steps still train normally. Separately,
 `torch.amp.GradScaler` also silently skips an optimizer step if fp16 *gradients*
-overflow (a different, unrelated failure mode from a NaN forward pass) -- that is
-standard, expected AMP behavior, not something this script needs to detect itself.
+overflow (a different, unrelated failure mode from a non-finite forward pass) -- that
+is standard, expected fp16-AMP behavior. It is disabled (a no-op) under bf16, which
+doesn't need loss scaling in the first place.
 """
 import argparse
 from pathlib import Path
@@ -54,6 +59,12 @@ def parse_args():
     p.add_argument("--lambda-balance", type=float, default=0.01)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--no-amp", action="store_true", help="disable mixed precision even on CUDA")
+    p.add_argument("--amp-dtype", choices=["bf16", "fp16"], default="bf16",
+                   help="bf16 (default) has fp32's dynamic range so pretrained-model activations "
+                        "don't overflow the way they commonly do under fp16 -- confirmed via a real "
+                        "run where every single batch produced a non-finite loss under fp16 on a T4. "
+                        "fp16 needs GradScaler to avoid gradient underflow; bf16 does not, so the "
+                        "scaler is a no-op (enabled=False) whenever this is bf16.")
     return p.parse_args()
 
 
@@ -63,7 +74,9 @@ def main():
     data_dir = Path(__file__).parents[1] / "data"
     device = resolve_device(None)
     use_amp = device.type == "cuda" and not args.no_amp
-    print(f"using device: {device}  mixed_precision: {use_amp}")
+    amp_dtype = torch.bfloat16 if args.amp_dtype == "bf16" else torch.float16
+    use_scaler = use_amp and amp_dtype == torch.float16  # bf16 doesn't need loss scaling
+    print(f"using device: {device}  mixed_precision: {use_amp} ({args.amp_dtype if use_amp else 'n/a'})")
     print(f"config: {vars(args)}")
 
     tokenizer = load_tokenizer(DEFAULT_ENCODER_NAME)
@@ -82,7 +95,7 @@ def main():
     print(before)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
     model.train()
 
     effective_batch = args.batch_size * args.grad_accum_steps
@@ -101,7 +114,7 @@ def main():
             batch = next(train_iter)
 
         batch = move_batch_to_device(batch, device)
-        with torch.amp.autocast(device_type=device.type, enabled=use_amp, dtype=torch.float16):
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp, dtype=amp_dtype):
             out = model(batch)
             loss, reward = compute_moe_loss(
                 out["blended_probs"], out["expert_probs"], out["gate_logits"], out["topk_idx"],
