@@ -65,6 +65,8 @@ def parse_args():
                         "run where every single batch produced a non-finite loss under fp16 on a T4. "
                         "fp16 needs GradScaler to avoid gradient underflow; bf16 does not, so the "
                         "scaler is a no-op (enabled=False) whenever this is bf16.")
+    p.add_argument("--checkpoint-path", default="checkpoints/moe_model.pt",
+                   help="where to save the trained model's state dict; pass an empty string to skip saving")
     return p.parse_args()
 
 
@@ -162,6 +164,18 @@ def main():
         a = after["per_type"][name]
         print(f"  {name}: n={a['n']}  accuracy {b.get('accuracy', float('nan')):.4f} -> {a['accuracy']:.4f}"
               + (f"  mae {b.get('mae', float('nan')):.4f} -> {a['mae']:.4f}" if "mae" in a else ""))
+
+    if args.checkpoint_path:
+        checkpoint_path = Path(args.checkpoint_path)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            "model_state_dict": model.state_dict(),
+            "domain_names": DEFAULT_DOMAIN_NAMES,
+            "encoder_name": DEFAULT_ENCODER_NAME,
+            "args": vars(args),
+            "after_metrics": after,
+        }, checkpoint_path)
+        print(f"\nsaved checkpoint to {checkpoint_path}")
 
 
 if __name__ == "__main__":
