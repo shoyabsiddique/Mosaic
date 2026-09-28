@@ -36,6 +36,24 @@ def main():
     ).to(device)
     model.eval()
 
+    # NeoBERT's rotary-embedding table (`freqs_cis`) is computed once in __init__ and
+    # registered with persistent=False, so it is NOT part of the checkpoint's state
+    # dict. If HF's fast-load path (low_cpu_mem_usage, on by default whenever
+    # `accelerate` is installed) constructs the model under a meta-device context
+    # before materializing real weights, a buffer that was only ever a side effect of
+    # __init__ -- never loaded from the checkpoint -- can end up staying an
+    # uninitialized/meta tensor rather than real cos/sin values. Applied to every
+    # query/key at every layer via rotary embeddings, that would explain NaN in
+    # literally 100% of state_hidden's elements from the very first layer onward.
+    backbone = model.encoder.backbone
+    freqs_cis = getattr(backbone, "freqs_cis", None)
+    if freqs_cis is None:
+        print("could not find `freqs_cis` at model.encoder.backbone.freqs_cis -- "
+              "check the actual attribute path (e.g. backbone.model.freqs_cis) and update this script")
+    else:
+        print(f"freqs_cis: shape={tuple(freqs_cis.shape)} dtype={freqs_cis.dtype} device={freqs_cis.device} "
+              f"is_meta={freqs_cis.is_meta} sample_values={freqs_cis.flatten()[:4].tolist()}")
+
     dataset = TypedDecisionDataset(data_dir, max_examples=300)
     collate = Collator(tokenizer, max_state_len=192)
     loader = DataLoader(dataset, batch_size=2, shuffle=True, collate_fn=collate)
