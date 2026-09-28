@@ -109,6 +109,7 @@ def run_moe_smoke_test(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
     losses = []
+    n_skipped = 0
     for step, batch in enumerate(loader):
         if step >= n_steps:
             break
@@ -119,6 +120,20 @@ def run_moe_smoke_test(
             batch["target"], batch["option_mask"], batch["qtype_idx"],
             lambda_expert=lambda_expert, lambda_calib=lambda_calib, lambda_balance=lambda_balance,
         )
+
+        if not torch.isfinite(loss):
+            # A NaN/Inf loss must not reach optimizer.step() -- AdamW would apply a NaN
+            # update and permanently corrupt every parameter from that point on. Skip
+            # this step, clear the bad gradients, and report enough to diagnose which
+            # rows caused it (see scripts/diagnose_nan.py for a deeper one-off dive).
+            n_skipped += 1
+            bad_rows = (~torch.isfinite(out["blended_probs"])).any(-1)
+            print(f"step {step:3d}  SKIPPED: non-finite loss ({loss.item()})  "
+                  f"bad_qtypes={batch['qtype_idx'][bad_rows].tolist()}  "
+                  f"bad_domains={[d for d, bad in zip(batch['domain'], bad_rows.tolist()) if bad]}")
+            optimizer.zero_grad()
+            continue
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -127,5 +142,9 @@ def run_moe_smoke_test(
         routed0 = [domain_names[i] for i in out["topk_idx"][0].tolist()]
         print(f"step {step:3d}  loss {loss.item():.4f}  mean_reward {reward.mean().item():.4f}  "
               f"ex0_actual_domain={batch['domain'][0]!r}  ex0_routed_to={routed0}")
+
+    if n_skipped:
+        print(f"\n{n_skipped}/{n_steps} steps skipped due to non-finite loss -- "
+              f"the model was NOT corrupted, but this needs root-causing before trusting a real run.")
 
     return losses
